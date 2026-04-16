@@ -14,3 +14,4 @@ data = {
 df = pd.DataFrame(data)
 df.to_excel("input.xlsx", index=False)
 print("Created input.xlsx")
+

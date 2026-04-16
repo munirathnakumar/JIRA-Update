@@ -61,3 +61,5 @@ settings:
   skip_empty_cells: true  # true = skip a field update if the Excel cell is blank
   log_file: "jira_update.log"
   log_level: "INFO"       # DEBUG | INFO | WARNING | ERROR
+
+

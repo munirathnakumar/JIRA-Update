@@ -1,7 +1,7 @@
 """
 JIRA Bulk Updater
 -----------------
-Reads an Excel sheet, maps columns to JIRA fields via config.yaml,
+Reads an  sheet, maps columns to JIRA fields via config.yaml,
 and updates each JIRA issue using the JIRA REST API v3.
 
 Usage:
