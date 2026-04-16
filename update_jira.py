@@ -88,92 +88,104 @@ FIELD_ALIASES = {
 }
 
 
-def build_field_payload(
+def _make_doc(text: str) -> dict:
+    """Wrap plain text in an Atlassian Document Format (ADF) paragraph."""
+    return {
+        "version": 1,
+        "type": "doc",
+        "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": text}]}
+        ],
+    }
+
+
+def build_field_entry(
     field_name: str,
     excel_value,
     update_mode: str,
     current_issue: dict,
     field_type: str = "text",
-) -> dict:
+) -> tuple[dict, dict]:
     """
-    Build the JIRA update payload fragment for a single field.
+    Return (fields_fragment, update_fragment) to be merged into the request body:
+      {"fields": {<fields_fragment>}, "update": {<update_fragment>}}
 
-    field_type controls how the value is serialised:
-      "text"         — plain string  (default)
+    JIRA REST API v3 rules:
+    - `fields`  dict  → direct value set; works for ALL field types (text, select, number…)
+    - `update`  dict  → operation list [{add/remove/set}]; needed only for multi-value
+                        system fields (labels, components) in append mode.
+
+    field_type values:
+      "text"         — plain string (default)
       "select"       — single-select dropdown  → {"value": "..."}
-      "multi_select" — multi-select dropdown   → [{"value": "..."}, ...]  (comma-separated in Excel)
-      "number"       — numeric field
-      "date"         — date field (YYYY-MM-DD string)
-      "radio"        — radio button (same payload shape as select)
-      "checkbox"     — checkbox / multi-select name-based → [{"value": "..."}, ...]
+      "radio"        — radio button            → {"value": "..."}  (same as select)
+      "multi_select" — multi-select dropdown   → [{"value": "..."}, ...]
+      "checkbox"     — checkbox field          → [{"value": "..."}, ...]  (same as multi_select)
+      "number"       — numeric custom field
+      "date"         — date field  YYYY-MM-DD
     """
-    # Resolve aliases
     jira_key = FIELD_ALIASES.get(field_name, field_name)
     str_value = str(excel_value).strip()
 
+    fields: dict = {}
+    update_ops: dict = {}
+
     # ---------- summary ----------
     if jira_key == "summary":
-        return {jira_key: [{"set": str_value}]}
+        fields[jira_key] = str_value
 
     # ---------- description ----------
-    if jira_key == "description":
+    elif jira_key == "description":
         if update_mode == "append":
             existing = ""
             try:
-                existing = current_issue["fields"]["description"]["content"][0]["content"][0]["text"]
+                existing = (
+                    current_issue["fields"]["description"]
+                    ["content"][0]["content"][0]["text"]
+                )
             except (KeyError, TypeError, IndexError):
                 pass
             str_value = f"{existing}\n{str_value}".strip()
-        doc = {
-            "version": 1,
-            "type": "doc",
-            "content": [
-                {
-                    "type": "paragraph",
-                    "content": [{"type": "text", "text": str_value}],
-                }
-            ],
-        }
-        return {jira_key: [{"set": doc}]}
+        fields[jira_key] = _make_doc(str_value)
 
-    # ---------- priority (built-in dropdown) ----------
-    if jira_key == "priority":
-        return {jira_key: [{"set": {"name": str_value}}]}
+    # ---------- priority (built-in single-select) ----------
+    elif jira_key == "priority":
+        fields[jira_key] = {"name": str_value}
 
     # ---------- assignee ----------
-    if jira_key == "assignee":
-        # Caller must resolve account ID before calling this
-        return {jira_key: [{"set": {"accountId": str_value}}]}
+    elif jira_key == "assignee":
+        fields[jira_key] = {"accountId": str_value}
 
     # ---------- labels ----------
-    if jira_key == "labels":
-        new_labels = [l.strip() for l in str_value.split(",") if l.strip()]
+    elif jira_key == "labels":
+        new_labels = [lbl.strip() for lbl in str_value.split(",") if lbl.strip()]
         if update_mode == "append":
-            existing = current_issue.get("fields", {}).get("labels", [])
-            new_labels = list(dict.fromkeys(existing + new_labels))  # dedupe, preserve order
-        return {jira_key: [{"set": new_labels}]}
+            # Use update-ops so we only add, not overwrite
+            update_ops[jira_key] = [{"add": lbl} for lbl in new_labels]
+        else:
+            fields[jira_key] = new_labels
 
     # ---------- components ----------
-    if jira_key == "components":
+    elif jira_key == "components":
         names = [c.strip() for c in str_value.split(",") if c.strip()]
         if update_mode == "append":
-            existing = [c["name"] for c in current_issue.get("fields", {}).get("components", [])]
-            names = list(dict.fromkeys(existing + names))
-        return {jira_key: [{"set": [{"name": n} for n in names]}]}
+            update_ops[jira_key] = [{"add": {"name": n}} for n in names]
+        else:
+            fields[jira_key] = [{"name": n} for n in names]
 
-    # ---------- story points (customfield_10016) ----------
-    if jira_key == "customfield_10016":
+    # ---------- story points ----------
+    elif jira_key == "customfield_10016":
         try:
-            return {jira_key: [{"set": float(str_value)}]}
+            fields[jira_key] = float(str_value)
         except ValueError:
             raise ValueError(f"Story points value '{str_value}' is not a number")
 
-    # ---------- single-select / radio dropdown (custom field) ----------
-    if field_type in ("select", "radio"):
-        return {jira_key: [{"set": {"value": str_value}}]}
+    # ---------- single-select / radio (custom field) ----------
+    elif field_type in ("select", "radio"):
+        fields[jira_key] = {"value": str_value}
 
-    # ---------- multi-select / checkbox dropdown (custom field) ----------
-    if field_type in ("multi_select", "checkbox"):
+    # ---------- multi-select / checkbox (custom field) ----------
+    elif field_type in ("multi_select", "checkbox"):
         options = [v.strip() for v in str_value.split(",") if v.strip()]
         if update_mode == "append":
             existing_vals = [
@@ -181,22 +193,24 @@ def build_field_payload(
                 for o in (current_issue.get("fields", {}).get(jira_key) or [])
             ]
             options = list(dict.fromkeys(existing_vals + options))
-        return {jira_key: [{"set": [{"value": v} for v in options]}]}
+        fields[jira_key] = [{"value": v} for v in options]
 
-    # ---------- number field ----------
-    if field_type == "number":
+    # ---------- number ----------
+    elif field_type == "number":
         try:
-            return {jira_key: [{"set": float(str_value)}]}
+            fields[jira_key] = float(str_value)
         except ValueError:
             raise ValueError(f"Expected a number for field '{jira_key}', got '{str_value}'")
 
-    # ---------- date field ----------
-    if field_type == "date":
-        # Accepts ISO format: YYYY-MM-DD
-        return {jira_key: [{"set": str_value}]}
+    # ---------- date ----------
+    elif field_type == "date":
+        fields[jira_key] = str_value  # YYYY-MM-DD
 
-    # ---------- generic text / custom field (default) ----------
-    return {jira_key: [{"set": str_value}]}
+    # ---------- generic text / custom field ----------
+    else:
+        fields[jira_key] = str_value
+
+    return fields, update_ops
 
 
 # ---------------------------------------------------------------------------
@@ -207,16 +221,21 @@ def update_issue(
     base_url: str,
     auth: HTTPBasicAuth,
     issue_key: str,
+    fields_payload: dict,
     update_payload: dict,
     logger: logging.Logger,
     dry_run: bool,
 ) -> bool:
-    """Send PATCH/PUT to JIRA to update the issue fields."""
+    """PUT to JIRA with separate `fields` (replace) and `update` (append ops) dicts."""
     url = f"{base_url}/rest/api/3/issue/{issue_key}"
-    body = {"update": update_payload}
+    body: dict = {}
+    if fields_payload:
+        body["fields"] = fields_payload
+    if update_payload:
+        body["update"] = update_payload
 
     if dry_run:
-        logger.info("[DRY-RUN] Would update %s with: %s", issue_key, update_payload)
+        logger.info("[DRY-RUN] Would update %s with: %s", issue_key, body)
         return True
 
     resp = requests.put(
@@ -306,6 +325,7 @@ def main():
             error_count += 1
             continue
 
+        fields_payload: dict = {}
         update_payload: dict = {}
 
         for mapping in field_mappings:
@@ -332,19 +352,20 @@ def main():
                         continue
                     cell_value = resolved
 
-                fragment = build_field_payload(
+                f_frag, u_frag = build_field_entry(
                     jira_field, cell_value, update_mode, current_issue or {}, field_type
                 )
-                update_payload.update(fragment)
+                fields_payload.update(f_frag)
+                update_payload.update(u_frag)
             except Exception as exc:
                 logger.error("  Error building payload for field '%s': %s", jira_field, exc)
 
-        if not update_payload:
+        if not fields_payload and not update_payload:
             logger.info("  No fields to update for %s — skipped", issue_key)
             skip_count += 1
             continue
 
-        ok = update_issue(base_url, auth, issue_key, update_payload, logger, dry_run)
+        ok = update_issue(base_url, auth, issue_key, fields_payload, update_payload, logger, dry_run)
         if ok:
             logger.info("  %s updated successfully", issue_key)
             success_count += 1
