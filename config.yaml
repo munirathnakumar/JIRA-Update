@@ -1,0 +1,63 @@
+# JIRA Connection Settings
+jira:
+  base_url: "https://your-domain.atlassian.net"
+  username: "your-email@example.com"
+  api_token: "your-api-token"   # Generate at: https://id.atlassian.com/manage-profile/security/api-tokens
+
+# Excel file path (absolute or relative to this config file)
+excel:
+  file_path: "input.xlsx"
+  sheet_name: "Sheet1"          # Sheet name to read from; use null for the first sheet
+
+# Column in the Excel sheet that contains JIRA Issue IDs (e.g. "PROJECT-123")
+jira_id_column: "JIRA_ID"
+
+# Field mappings: excel_column_name -> jira_field
+# Supported jira_field values:
+#   Simple text fields   : summary, description, priority, status, assignee, labels
+#   Custom fields        : customfield_XXXXX  (find ID in JIRA field config)
+#   Multi-value fields   : labels, components  (use comma-separated values in Excel)
+#
+# Update mode per field:
+#   "replace"  — overwrite the existing JIRA value entirely (default)
+#   "append"   — append to existing value (supported for description, labels, components)
+field_mappings:
+  - excel_column: "Summary"
+    jira_field: "summary"
+    update_mode: "replace"
+
+  - excel_column: "Description"
+    jira_field: "description"
+    update_mode: "replace"
+
+  - excel_column: "Priority"
+    jira_field: "priority"
+    update_mode: "replace"
+    # Valid values: Highest, High, Medium, Low, Lowest
+
+  - excel_column: "Assignee"
+    jira_field: "assignee"
+    update_mode: "replace"
+    # Value should be the JIRA account ID or email address
+
+  - excel_column: "Labels"
+    jira_field: "labels"
+    update_mode: "replace"
+    # Comma-separated labels in Excel, e.g. "bug,backend,v2"
+
+  - excel_column: "Story Points"
+    jira_field: "story_points"
+    update_mode: "replace"
+    # Story points — maps to customfield_10016 on most JIRA instances
+
+  # Example custom field mapping
+  # - excel_column: "Customer Name"
+  #   jira_field: "customfield_10100"
+  #   update_mode: "replace"
+
+# Behaviour settings
+settings:
+  dry_run: false          # true = print what would be updated, without actually calling JIRA
+  skip_empty_cells: true  # true = skip a field update if the Excel cell is blank
+  log_file: "jira_update.log"
+  log_level: "INFO"       # DEBUG | INFO | WARNING | ERROR
