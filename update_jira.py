@@ -93,11 +93,19 @@ def build_field_payload(
     excel_value,
     update_mode: str,
     current_issue: dict,
+    field_type: str = "text",
 ) -> dict:
     """
     Build the JIRA update payload fragment for a single field.
-    Returns a dict like {"summary": {"set": "New title"}} or
-    a special key for fields handled outside the generic update path.
+
+    field_type controls how the value is serialised:
+      "text"         — plain string  (default)
+      "select"       — single-select dropdown  → {"value": "..."}
+      "multi_select" — multi-select dropdown   → [{"value": "..."}, ...]  (comma-separated in Excel)
+      "number"       — numeric field
+      "date"         — date field (YYYY-MM-DD string)
+      "radio"        — radio button (same payload shape as select)
+      "checkbox"     — checkbox / multi-select name-based → [{"value": "..."}, ...]
     """
     # Resolve aliases
     jira_key = FIELD_ALIASES.get(field_name, field_name)
@@ -128,7 +136,7 @@ def build_field_payload(
         }
         return {jira_key: [{"set": doc}]}
 
-    # ---------- priority ----------
+    # ---------- priority (built-in dropdown) ----------
     if jira_key == "priority":
         return {jira_key: [{"set": {"name": str_value}}]}
 
@@ -160,7 +168,34 @@ def build_field_payload(
         except ValueError:
             raise ValueError(f"Story points value '{str_value}' is not a number")
 
-    # ---------- generic custom field (string) ----------
+    # ---------- single-select / radio dropdown (custom field) ----------
+    if field_type in ("select", "radio"):
+        return {jira_key: [{"set": {"value": str_value}}]}
+
+    # ---------- multi-select / checkbox dropdown (custom field) ----------
+    if field_type in ("multi_select", "checkbox"):
+        options = [v.strip() for v in str_value.split(",") if v.strip()]
+        if update_mode == "append":
+            existing_vals = [
+                o.get("value", "")
+                for o in (current_issue.get("fields", {}).get(jira_key) or [])
+            ]
+            options = list(dict.fromkeys(existing_vals + options))
+        return {jira_key: [{"set": [{"value": v} for v in options]}]}
+
+    # ---------- number field ----------
+    if field_type == "number":
+        try:
+            return {jira_key: [{"set": float(str_value)}]}
+        except ValueError:
+            raise ValueError(f"Expected a number for field '{jira_key}', got '{str_value}'")
+
+    # ---------- date field ----------
+    if field_type == "date":
+        # Accepts ISO format: YYYY-MM-DD
+        return {jira_key: [{"set": str_value}]}
+
+    # ---------- generic text / custom field (default) ----------
     return {jira_key: [{"set": str_value}]}
 
 
@@ -277,6 +312,7 @@ def main():
             excel_col = mapping["excel_column"]
             jira_field = mapping["jira_field"]
             update_mode = mapping.get("update_mode", "replace")
+            field_type = mapping.get("field_type", "text")
 
             if excel_col not in df.columns:
                 logger.warning("  Column '%s' not found in Excel — skipped", excel_col)
@@ -297,7 +333,7 @@ def main():
                     cell_value = resolved
 
                 fragment = build_field_payload(
-                    jira_field, cell_value, update_mode, current_issue or {}
+                    jira_field, cell_value, update_mode, current_issue or {}, field_type
                 )
                 update_payload.update(fragment)
             except Exception as exc:

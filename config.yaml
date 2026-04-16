@@ -20,7 +20,20 @@ jira_id_column: "JIRA_ID"
 #
 # Update mode per field:
 #   "replace"  — overwrite the existing JIRA value entirely (default)
-#   "append"   — append to existing value (supported for description, labels, components)
+#   "append"   — append to existing value (supported for description, labels, components, multi_select)
+#
+# field_type — controls how the Excel value is serialised before sending to JIRA:
+#   "text"         — plain string (default; works for summary, description, etc.)
+#   "select"       — single-select / dropdown  e.g. "In Progress"  → {"value": "In Progress"}
+#   "radio"        — radio-button field        (same payload as select)
+#   "multi_select" — multi-select dropdown     e.g. "Red,Blue"     → [{"value":"Red"},{"value":"Blue"}]
+#   "checkbox"     — checkbox field            (same payload as multi_select)
+#   "number"       — numeric custom field
+#   "date"         — date field, expects YYYY-MM-DD in Excel
+#
+# How to find the customfield_XXXXX ID for a JIRA field:
+#   GET https://<your-domain>.atlassian.net/rest/api/3/field
+#   Look for the field by name in the response.
 field_mappings:
   - excel_column: "Summary"
     jira_field: "summary"
@@ -50,7 +63,43 @@ field_mappings:
     update_mode: "replace"
     # Story points — maps to customfield_10016 on most JIRA instances
 
-  # Example custom field mapping
+  # --- Dropdown / Select examples ---
+
+  # Single-select dropdown (e.g. "Environment" field with options like "Production", "Staging")
+  # - excel_column: "Environment"
+  #   jira_field: "customfield_10200"
+  #   field_type: "select"
+  #   update_mode: "replace"
+
+  # Radio button field (same payload as select)
+  # - excel_column: "Team"
+  #   jira_field: "customfield_10201"
+  #   field_type: "radio"
+  #   update_mode: "replace"
+
+  # Multi-select dropdown (comma-separated values in Excel e.g. "Frontend,Backend")
+  # - excel_column: "Affected Areas"
+  #   jira_field: "customfield_10202"
+  #   field_type: "multi_select"
+  #   update_mode: "replace"   # use "append" to add to existing selections
+
+  # Checkbox field (comma-separated in Excel)
+  # - excel_column: "Platforms"
+  #   jira_field: "customfield_10203"
+  #   field_type: "checkbox"
+  #   update_mode: "replace"
+
+  # Number custom field
+  # - excel_column: "Estimated Hours"
+  #   jira_field: "customfield_10204"
+  #   field_type: "number"
+
+  # Date custom field (value in Excel must be YYYY-MM-DD)
+  # - excel_column: "Due Date"
+  #   jira_field: "customfield_10205"
+  #   field_type: "date"
+
+  # Plain text custom field (default — no field_type needed)
   # - excel_column: "Customer Name"
   #   jira_field: "customfield_10100"
   #   update_mode: "replace"
